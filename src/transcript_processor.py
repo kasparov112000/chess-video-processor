@@ -57,9 +57,16 @@ class TranscriptProcessor:
         Returns list of dicts with move info and position in text.
         """
         moves = []
+        # Track matched character positions to avoid overlapping matches
+        matched_positions: set[int] = set()
 
         for pattern in self.compiled_patterns:
             for match in pattern.finditer(text):
+                # Skip if this position overlaps with an already matched range
+                match_range = set(range(match.start(), match.end()))
+                if matched_positions & match_range:
+                    continue
+
                 move_text = match.group(0)
                 san = self._normalize_to_san(move_text, match.groups())
 
@@ -70,6 +77,8 @@ class TranscriptProcessor:
                         'position': match.start(),
                         'timestamp': timestamp,
                     })
+                    # Mark these positions as matched
+                    matched_positions.update(match_range)
 
         # Sort by position in text and deduplicate
         moves.sort(key=lambda x: x['position'])
