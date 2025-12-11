@@ -155,6 +155,48 @@ class ChessFusionAgent:
         board_fen = state["board_fen"]
         validated_moves = state["validated_moves"].copy()
 
+        # Handle transcript-only mode when no positions detected
+        if not positions:
+            # Process all transcript moves directly
+            if current_idx >= len(transcript_moves):
+                return {"current_position_idx": current_idx}
+
+            board = chess.Board(board_fen)
+            move_data = transcript_moves[current_idx]
+            move_found = False
+
+            try:
+                chess_move = board.parse_san(move_data["san"])
+                board.push(chess_move)
+
+                # Calculate move number based on whose turn it was
+                move_num = state["current_move_number"]
+
+                validated_moves.append(DetectedMove(
+                    move_number=move_num,
+                    move_san=move_data["san"],
+                    move_uci=chess_move.uci(),
+                    timestamp=move_data.get("timestamp", 0.0),
+                    source="transcript",
+                    fen_before=board_fen,
+                    fen_after=board.fen(),
+                ))
+                move_found = True
+            except (chess.InvalidMoveError, chess.AmbiguousMoveError, chess.IllegalMoveError) as e:
+                logger.debug(f"Skipping invalid move {move_data.get('san')}: {e}")
+
+            new_move_number = state["current_move_number"]
+            if move_found and board.turn == chess.WHITE:
+                new_move_number += 1
+
+            return {
+                "current_position_idx": current_idx + 1,
+                "current_move_number": new_move_number,
+                "board_fen": board.fen() if move_found else board_fen,
+                "validated_moves": validated_moves,
+            }
+
+        # Normal mode with visual positions
         if current_idx >= len(positions):
             return {"current_position_idx": current_idx}
 
@@ -212,8 +254,19 @@ class ChessFusionAgent:
         }
 
     def _should_continue_processing(self, state: FusionState) -> str:
-        """Check if we should continue processing positions"""
-        if state["current_position_idx"] < len(state["positions"]):
+        """Check if we should continue processing positions/moves"""
+        positions = state["positions"]
+        transcript_moves = state["transcript_moves"]
+        current_idx = state["current_position_idx"]
+
+        # In transcript-only mode, iterate through transcript_moves
+        if not positions:
+            if current_idx < len(transcript_moves):
+                return "continue"
+            return "done"
+
+        # Normal mode - iterate through positions
+        if current_idx < len(positions):
             return "continue"
         return "done"
 

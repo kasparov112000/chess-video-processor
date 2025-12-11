@@ -101,9 +101,19 @@ async def process_video(
 
     try:
         # Step 1: Extract board positions from video
-        logger.info("Extracting board positions from video...")
-        positions = board_detector.process_video(video_path)
+        # Convert sample_rate: API uses "seconds between frames", internally use fps
+        # e.g., sample_rate=30 means 1 frame every 30 seconds = 0.033 fps
+        effective_sample_rate = 1.0 / sample_rate if sample_rate > 0 else 1
+        logger.info(f"Extracting board positions from video (1 frame every {sample_rate}s)...")
+        positions = board_detector.process_video(video_path, effective_sample_rate)
         logger.info(f"Found {len(positions)} unique positions")
+
+        # Check if positions are reliable enough to use for fusion
+        # If only starting position with low confidence, fall back to transcript-only
+        if len(positions) <= 1:
+            if positions and positions[0].confidence < 0.5:
+                logger.info("Single low-confidence position detected, using transcript-only mode")
+                positions = []  # Clear positions to trigger transcript-only fusion
 
         # Step 2: Process transcript
         logger.info("Processing transcript...")
@@ -155,6 +165,85 @@ async def process_video(
         )
 
     finally:
+        # Cleanup temp file
+        if video_path:
+            Path(video_path).unlink(missing_ok=True)
+
+
+@app.post("/extract-visual-positions")
+async def extract_visual_positions(
+    video: UploadFile = File(None),
+    video_url: Optional[str] = Form(None),
+    sample_rate: int = Form(10),
+    provider: str = Form("yolo"),
+):
+    """
+    Extract visual board positions from video using YOLO.
+
+    Returns positions array to be saved to question document.
+
+    Args:
+        video: Video file upload
+        video_url: URL to video file
+        sample_rate: Seconds between sampled frames (default 10)
+        provider: "yolo" (fast, free, default)
+    """
+    start_time = time.time()
+
+    if not video and not video_url:
+        raise HTTPException(400, "Either video file or video_url required")
+
+    # Set provider to YOLO (only supported provider now)
+    original_provider = settings.llm_provider
+    settings.llm_provider = "yolo"
+
+    # Save uploaded video to temp file
+    video_path = None
+    try:
+        if video:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+                content = await video.read()
+                tmp.write(content)
+                video_path = tmp.name
+        elif video_url:
+            # Download video from URL
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.get(video_url)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+                    tmp.write(response.content)
+                    video_path = tmp.name
+
+        # Extract positions
+        effective_sample_rate = 1.0 / sample_rate if sample_rate > 0 else 0.1
+        logger.info(f"Extracting positions with {provider} (1 frame every {sample_rate}s)...")
+
+        positions = board_detector.process_video(video_path, effective_sample_rate)
+
+        processing_time = time.time() - start_time
+        logger.info(f"Extracted {len(positions)} positions in {processing_time:.1f}s")
+
+        # Convert positions to serializable format
+        positions_data = [
+            {
+                "timestamp": p.timestamp,
+                "fen": p.fen,
+                "confidence": p.confidence,
+                "frame_number": p.frame_number,
+            }
+            for p in positions
+        ]
+
+        return {
+            "provider": provider,
+            "positions_count": len(positions),
+            "positions": positions_data,
+            "processing_time": processing_time,
+            "sample_rate": sample_rate,
+        }
+
+    finally:
+        # Restore original provider
+        settings.llm_provider = original_provider
         # Cleanup temp file
         if video_path:
             Path(video_path).unlink(missing_ok=True)

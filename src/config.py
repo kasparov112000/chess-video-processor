@@ -5,9 +5,13 @@ from typing import Literal
 class Settings(BaseSettings):
     # LLM Configuration
     openai_api_key: str = ""
-    anthropic_api_key: str = ""
-    llm_provider: Literal["openai", "anthropic", "ollama"] = "anthropic"
-    llm_model: str = "claude-3-5-sonnet-20241022"
+    anthropic_api_key: str = ""  # Still used for fusion_agent LLM calls
+    llm_provider: Literal["yolo", "openai", "anthropic", "ollama"] = "yolo"
+    llm_model: str = "moondream"
+
+    # Ollama Configuration (for local vision model)
+    ollama_url: str = "http://localhost:11434"
+    ollama_vision_model: str = "moondream"
 
     # Server
     host: str = "0.0.0.0"
